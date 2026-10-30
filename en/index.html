@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<!-- English (British) version of index.html: same code and data. Every relative path resolves from the site root.
+     Other versions: index.html (Portuguese), es/index.html (Spanish) -->
+<base href="../">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brazil 2026 election, polling station by polling station</title>
+<meta name="description" content="Results of Brazil's 2026 elections by municipality and by polling station: first round (President, Governor and Senator, every candidate) and second round (President and Governor), compared between rounds in the same electoral sections. Data from the TSE (Superior Electoral Court).">
+<meta name="theme-color" content="#0f3b46">
+<!-- the same page in Portuguese: index.html -->
+<link rel="alternate" hreflang="pt-BR" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="alternate" hreflang="en-GB" href="https://nathandamas.github.io/mapa-voto-2026/en/">
+<link rel="alternate" hreflang="es-ES" href="https://nathandamas.github.io/mapa-voto-2026/es/">
+<link rel="alternate" hreflang="x-default" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<script>
+/* Começa a baixar os dados já na leitura do HTML, em paralelo com o MapLibre (antes, só começava depois de o app.js
+   rodar, meio segundo a quase 2 segundos depois). O app.js usa estas promessas em vez de pedir de novo. */
+window.CARGA = (function () {
+  var j = function (u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error(u + ": " + r.status); return r.json(); }); };
+  var v = function (m, rel) { return m.arquivos && m.arquivos[rel] ? "?v=" + m.arquivos[rel] : ""; };
+  var meta = j("data/meta.json?t=" + Date.now());   // sempre fresco: é ele que diz a versão dos outros
+  var malha = meta.then(function (m) { var h = m.malha && m.malha["brasil.topo.json"]; return j("malha/brasil.topo.json" + (h ? "?v=" + h : "")); });
+  // municípios: só a parte do mapa inicial ("a"); dados antigos, sem as partes, vêm inteiros
+  var mun = meta.then(function (m) { return m.arquivos["municipios_a.json"] ? j("data/municipios_a.json" + v(m, "municipios_a.json")) : j("data/municipios.json" + v(m, "municipios.json")); });
+  var ext = meta.then(function (m) { return m.arquivos["exterior.json"] ? j("data/exterior.json" + v(m, "exterior.json")).catch(function () { return null; }) : null; });
+  [malha, mun, ext].forEach(function (p) { p.catch(function () {}); });   // o erro é tratado no app.js
+  return { meta: meta, malha: malha, mun: mun, ext: ext };
+})();
+</script>
+<link rel="stylesheet" href="lib/maplibre-gl.css">
+<link rel="stylesheet" href="assets/estilo.css?v=9">
+</head>
+<body>
+<div id="mapa" aria-label="Map of results by municipality and by polling station"></div>
+
+<aside id="painel" class="painel" aria-label="Map controls">
+  <div class="painel-cabeca">
+    <div>
+      <p class="selo"><span id="selo">2026 elections · President · Second round</span> · <a class="idioma" href="./" hreflang="pt-BR" lang="pt-BR">Português</a> · <a class="idioma" href="es/" hreflang="es-ES" lang="es-ES">Español</a></p>
+      <h1>How every polling station voted</h1>
+    </div>
+    <div class="cabeca-botoes">
+      <!-- "recolher tudo", como no Nexo: fica só o título -->
+      <button id="minimizar" class="recolher" type="button" aria-expanded="true" aria-controls="painel-fixo painel-corpo" title="Collapse the whole panel" aria-label="Collapse the whole panel">
+        <svg class="ic-min" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <svg class="ic-abrir" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <!-- recolhe só a parte de baixo (resumo, busca, filtro, notas) -->
+      <button id="recolher" class="recolher" type="button" aria-expanded="true" aria-controls="painel-corpo" title="Collapse the lower part of the panel" aria-label="Collapse the lower part of the panel">▾</button>
+    </div>
+  </div>
+  <p id="aviso-sintetico" class="aviso-sintetico" hidden><b>Synthetic test data.</b> Made-up votes. Do not use or share.</p>
+  <div id="painel-fixo" class="painel-fixo">
+    <!-- 1º ou 2º turno: aparece só quando há dados do 1º turno (data/t1/) -->
+    <div id="turnos" class="turnos" role="group" aria-label="Round" hidden><button type="button" data-t="1" aria-pressed="false">First round</button><button type="button" data-t="2" aria-pressed="true">Second round</button></div>
+    <span class="rotulo-modo" id="rotulo-modo">Colour by</span>
+    <div class="selects">
+      <select id="cargo" aria-label="Office" hidden><option value="pres">President</option><option value="gov">Governor</option></select>
+      <!-- menu com busca, como no Nexo; o <select> escondido guarda o valor (e serve de reserva sem JavaScript) -->
+      <button type="button" id="modo-botao" class="modo-botao" aria-haspopup="listbox" aria-expanded="false" aria-controls="modo-painel"
+        aria-labelledby="rotulo-modo modo-texto"><span id="modo-texto">Leading candidate</span></button>
+      <div id="modo-painel" class="modo-painel" hidden>
+        <input id="modo-filtro" type="text" class="modo-filtro" placeholder="Search for a candidate" autocomplete="off" spellcheck="false"
+          role="combobox" aria-label="Search the menu options" aria-controls="modo-lista" aria-expanded="true" aria-autocomplete="list">
+        <div id="modo-lista" class="modo-lista" role="listbox" aria-labelledby="rotulo-modo" tabindex="-1"></div>
+      </div>
+      <select id="modo" class="vh" tabindex="-1" aria-hidden="true"></select>
+    </div>
+    <div id="legenda" class="legenda" aria-live="polite"></div>
+  </div>
+  <div id="painel-corpo" class="painel-corpo">
+    <p id="resumo-brasil" class="resumo"></p>
+
+    <div class="campo">
+      <label for="busca">Find a polling station or a candidate</label>
+      <div class="linha-busca">
+        <div class="auto">
+          <input id="busca" type="text" inputmode="search" placeholder="School, city or candidate" aria-autocomplete="list" aria-controls="sugestoes" aria-expanded="false" autocomplete="off">
+          <ul id="sugestoes" class="sugestoes" role="listbox" hidden></ul>
+        </div>
+        <button id="onde-estou" class="icone" type="button" title="Go to my location" aria-label="Go to my location">◎</button>
+      </div>
+    </div>
+
+    <div id="filtro" class="campo" hidden>
+      <label for="limiar">Only where it reached <output id="limiar-txt" for="limiar">all</output></label>
+      <input id="limiar" type="range" min="0" max="90" step="1" value="0">
+    </div>
+
+    <p class="nota">Each area is a municipality. Zoom in to see the polling stations: the size of each circle shows its valid votes.</p>
+    <details class="sobre">
+      <summary>How this was made</summary>
+      <p>Votes, registered voters and turnout: <span id="fonte-votos">TSE ballot-box reports (open data), first and second rounds</span>, for President. The TSE is Brazil's Superior Electoral Court. Each electoral section (one voting machine) is counted at the polling station where it voted in the second round, according to the TSE register of polling stations (via <a href="https://github.com/nathandamas/onde-voto-2026" target="_blank" rel="noopener">onde-voto-2026</a>), using the coordinates supplied by the TSE.</p>
+      <p>Candidates: % of valid votes (excluding blank and spoilt ballots). Blank and spoilt ballots: % of all votes cast. Abstention: registered voters who did not vote, as a % of registered voters. Voting is compulsory in Brazil, but abstention is common. The comparison with the first round only uses electoral sections with results in both rounds, so a section moving between polling stations does not distort it.</p>
+      <p><b>First round.</b> President, Governor and Senator, with every candidate (TSE, votes by electoral section in the first round); each section is counted at the polling station where it voted in the first round. Votes for annulled candidacies are not counted as valid, as in the official TSE tally. In “Leading candidate”, President follows the party colour; Governor and Senator follow the candidate's place in the state (1st, 2nd and 3rd; the others in grey). For President and Governor, the darker shade marks 50% or more of valid votes (the absolute majority that wins in the first round). Senator: each voter chose two candidates, and percentages are of all valid Senate votes. For a candidate's share, four classes with the same number of municipalities (quartiles), in the candidate's colour.</p>
+      <p id="coord-txt"></p>
+      <p><b>Voting abroad.</b> The TSE gives no coordinates outside Brazil. Each city where the TSE set up electoral sections becomes a point at the centre of the city (coordinates from Natural Earth and, for small cities, GeoNames), with its area proportional to valid votes; zoom out to see the world. The city is the one the TSE records for those sections: some polling stations are in other cities under the same consulate. Brazilians abroad do not vote for governor.</p>
+      <p><b>Colours.</b> ColorBrewer schemes (Brewer, Hatchard and Harrower, 2003): diverging for a candidate's % (centred on 50%, where the majority changes) and for the change since the first round (centred on 0, in purple and green so that direction is not confused with party); sequential for blank and spoilt ballots and for abstention, with classes holding the same number of municipalities (quartiles). Every pair of neighbouring classes was measured with a colour difference ΔE<sub>00</sub> ≥ 10, including simulated red–green colour blindness (deuteranomaly and protanomaly).</p>
+      <p><b>Size and visual weight.</b> A municipality that is large in area is not necessarily one with many voters. With “Transparency by number of voters” switched on, municipalities with fewer voters are more transparent (value-by-alpha, Roth, Woodruff and Johnson, 2010); in the “Leading candidate” view, each candidate then has a single colour, so that lightness shows only the electorate and is not confused with the margin. For polling stations, the area of each circle is proportional to valid votes. In the change maps, polling stations with fewer than 50 comparable valid votes are faded: with few votes, percentages swing a lot by chance.</p>
+      <p><b>Projection.</b> The map uses Web Mercator, the standard for web maps, which exaggerates areas away from the Equator: compared with Manaus, by about +8% in Brasília, +19% in São Paulo, +23% in Curitiba and +44% in Chuí. Areas should therefore not be compared across regions.</p>
+      <p><b>Reading the map.</b> The result for a municipality or polling station describes its voters as a group, not each voter (ecological fallacy). The picture also changes with the unit chosen: municipality, polling station or electoral section can tell different stories (modifiable areal unit problem, Openshaw, 1984). Hollow circles mark polling stations with an approximate position (centre of the locality in the IBGE address register, CNEFE). Methodology summary: <a href="docs/methodology.md" target="_blank" rel="noopener">docs/methodology.md</a> (full notes in Portuguese: <a href="docs/fundamentacao.md" target="_blank" rel="noopener" hreflang="pt-BR">docs/fundamentacao.md</a>).</p>
+      <p>Municipal boundaries: IBGE (Brazilian Institute of Geography and Statistics), 2025 Digital Municipal Boundaries, generalised with the Visvalingam and Whyatt (1993) algorithm: a light version for the whole country (2 km tolerance) and, for the outline of the selected municipality, a detailed version (20 m tolerance) downloaded only for it. <span id="avisos-malha"></span></p>
+      <p id="gerado"></p>
+    </details>
+  </div>
+</aside>
+
+<aside id="detalhe" class="detalhe" hidden aria-label="Result for the selected place" aria-live="polite">
+  <button id="detalhe-fechar" class="detalhe-fechar" type="button" aria-label="Close" title="Close">×</button>
+  <div id="detalhe-corpo"></div>
+</aside>
+
+<script src="lib/maplibre-gl.js"></script>
+<script src="lib/topojson-client.min.js"></script>
+<script src="assets/textos.js?v=5"></script>
+<script src="assets/app.js?v=11"></script>
+</body>
+</html>

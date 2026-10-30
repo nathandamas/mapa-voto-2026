@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mapa do 1º e do 2º turno por local de votação</title>
+<meta name="description" content="Resultado das eleições de 2026 por município e por local de votação: 1º turno (presidente, governador e senador, com todos os candidatos) e 2º turno (presidente e governador), com a comparação entre os turnos nas mesmas seções. Dados do TSE.">
+<meta name="theme-color" content="#0f3b46">
+<!-- a mesma página em inglês britânico (en/index.html) e em espanhol da Espanha (es/index.html): mesmo código e mesmos dados; textos em assets/textos.js -->
+<link rel="alternate" hreflang="pt-BR" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="alternate" hreflang="en-GB" href="https://nathandamas.github.io/mapa-voto-2026/en/">
+<link rel="alternate" hreflang="es-ES" href="https://nathandamas.github.io/mapa-voto-2026/es/">
+<link rel="alternate" hreflang="x-default" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<script>
+/* Começa a baixar os dados já na leitura do HTML, em paralelo com o MapLibre (antes, só começava depois de o app.js
+   rodar, meio segundo a quase 2 segundos depois). O app.js usa estas promessas em vez de pedir de novo. */
+window.CARGA = (function () {
+  var j = function (u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error(u + ": " + r.status); return r.json(); }); };
+  var v = function (m, rel) { return m.arquivos && m.arquivos[rel] ? "?v=" + m.arquivos[rel] : ""; };
+  var meta = j("data/meta.json?t=" + Date.now());   // sempre fresco: é ele que diz a versão dos outros
+  var malha = meta.then(function (m) { var h = m.malha && m.malha["brasil.topo.json"]; return j("malha/brasil.topo.json" + (h ? "?v=" + h : "")); });
+  // municípios: só a parte do mapa inicial ("a"); dados antigos, sem as partes, vêm inteiros
+  var mun = meta.then(function (m) { return m.arquivos["municipios_a.json"] ? j("data/municipios_a.json" + v(m, "municipios_a.json")) : j("data/municipios.json" + v(m, "municipios.json")); });
+  var ext = meta.then(function (m) { return m.arquivos["exterior.json"] ? j("data/exterior.json" + v(m, "exterior.json")).catch(function () { return null; }) : null; });
+  [malha, mun, ext].forEach(function (p) { p.catch(function () {}); });   // o erro é tratado no app.js
+  return { meta: meta, malha: malha, mun: mun, ext: ext };
+})();
+</script>
+<link rel="stylesheet" href="lib/maplibre-gl.css">
+<link rel="stylesheet" href="assets/estilo.css?v=9">
+</head>
+<body>
+<div id="mapa" aria-label="Mapa do resultado por município e por local de votação"></div>
+
+<aside id="painel" class="painel" aria-label="Controles do mapa">
+  <div class="painel-cabeca">
+    <div>
+      <p class="selo"><span id="selo">Eleições 2026 · Presidente · 2º turno</span> · <a class="idioma" href="en/" hreflang="en-GB" lang="en-GB">English</a> · <a class="idioma" href="es/" hreflang="es-ES" lang="es-ES">Español</a></p>
+      <h1>O voto em cada local de votação</h1>
+    </div>
+    <div class="cabeca-botoes">
+      <!-- "recolher tudo", como no Nexo: fica só o título -->
+      <button id="minimizar" class="recolher" type="button" aria-expanded="true" aria-controls="painel-fixo painel-corpo" title="Recolher o painel inteiro" aria-label="Recolher o painel inteiro">
+        <svg class="ic-min" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <svg class="ic-abrir" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <!-- recolhe só a parte de baixo (resumo, busca, filtro, notas) -->
+      <button id="recolher" class="recolher" type="button" aria-expanded="true" aria-controls="painel-corpo" title="Recolher a parte de baixo do painel" aria-label="Recolher a parte de baixo do painel">▾</button>
+    </div>
+  </div>
+  <p id="aviso-sintetico" class="aviso-sintetico" hidden><b>Dados sintéticos de teste.</b> Votos inventados. Não use nem divulgue.</p>
+  <div id="painel-fixo" class="painel-fixo">
+    <!-- 1º ou 2º turno: aparece só quando há dados do 1º turno (data/t1/) -->
+    <div id="turnos" class="turnos" role="group" aria-label="Turno" hidden><button type="button" data-t="1" aria-pressed="false">1º turno</button><button type="button" data-t="2" aria-pressed="true">2º turno</button></div>
+    <span class="rotulo-modo" id="rotulo-modo">Colorir por</span>
+    <div class="selects">
+      <select id="cargo" aria-label="Cargo" hidden><option value="pres">Presidente</option><option value="gov">Governador</option></select>
+      <!-- menu com busca, como no Nexo; o <select> escondido guarda o valor (e serve de reserva sem JavaScript) -->
+      <button type="button" id="modo-botao" class="modo-botao" aria-haspopup="listbox" aria-expanded="false" aria-controls="modo-painel"
+        aria-labelledby="rotulo-modo modo-texto"><span id="modo-texto">Mais votado</span></button>
+      <div id="modo-painel" class="modo-painel" hidden>
+        <input id="modo-filtro" type="text" class="modo-filtro" placeholder="Busque um candidato" autocomplete="off" spellcheck="false"
+          role="combobox" aria-label="Busque uma opção do menu" aria-controls="modo-lista" aria-expanded="true" aria-autocomplete="list">
+        <div id="modo-lista" class="modo-lista" role="listbox" aria-labelledby="rotulo-modo" tabindex="-1"></div>
+      </div>
+      <select id="modo" class="vh" tabindex="-1" aria-hidden="true"></select>
+    </div>
+    <div id="legenda" class="legenda" aria-live="polite"></div>
+  </div>
+  <div id="painel-corpo" class="painel-corpo">
+    <p id="resumo-brasil" class="resumo"></p>
+
+    <div class="campo">
+      <label for="busca">Encontre seu local de votação ou um candidato</label>
+      <div class="linha-busca">
+        <div class="auto">
+          <input id="busca" type="text" inputmode="search" placeholder="Escola, cidade ou candidato" aria-autocomplete="list" aria-controls="sugestoes" aria-expanded="false" autocomplete="off">
+          <ul id="sugestoes" class="sugestoes" role="listbox" hidden></ul>
+        </div>
+        <button id="onde-estou" class="icone" type="button" title="Ir para onde estou" aria-label="Ir para onde estou">◎</button>
+      </div>
+    </div>
+
+    <div id="filtro" class="campo" hidden>
+      <label for="limiar">Só onde teve <output id="limiar-txt" for="limiar">todos</output></label>
+      <input id="limiar" type="range" min="0" max="90" step="1" value="0">
+    </div>
+
+    <p class="nota">Cada área é um município. Aproxime o mapa para ver os locais de votação: o tamanho do círculo indica os votos válidos.</p>
+    <details class="sobre">
+      <summary>Como foi feito</summary>
+      <p>Votos, eleitores e comparecimento: <span id="fonte-votos">boletins de urna do TSE (Dados Abertos), 1º e 2º turnos</span>, cargo Presidente. Cada seção é contada no local onde votou no 2º turno, segundo o cadastro de locais de votação do TSE (via <a href="https://github.com/nathandamas/onde-voto-2026" target="_blank" rel="noopener">onde-voto-2026</a>), com as coordenadas informadas pelo próprio TSE.</p>
+      <p>Candidatos: % dos votos válidos (sem brancos e nulos). Brancos e nulos: % dos votos totais. Abstenção: eleitores que não votaram, em % dos eleitores aptos. A comparação com o 1º turno usa só as seções que têm resultado nos dois turnos, então mudança de local entre turnos não distorce a conta.</p>
+      <p><b>1º turno.</b> Presidente, governador e senador, com todos os candidatos (TSE, votação por seção eleitoral do 1º turno); cada seção é contada no local onde votou no 1º turno. Votos em candidaturas anuladas não contam como válidos, como na totalização do TSE. No “mais votado”, o presidente segue a cor do partido; governador e senador, a colocação do candidato no estado (1º, 2º e 3º colocados; os demais em cinza). No presidente e no governador, o tom mais escuro marca 50% ou mais dos votos válidos (a maioria absoluta que elege no 1º turno). Senador: cada eleitor votou em dois candidatos, e o percentual é do total de votos válidos para senador. No % de um candidato, quatro classes com o mesmo número de municípios (quartis), na cor do candidato.</p>
+      <p id="coord-txt"></p>
+      <p><b>Exterior.</b> O TSE não informa coordenadas fora do país. Cada cidade onde o TSE instalou seções vira um ponto no centro da cidade (coordenadas da Natural Earth e, para cidades pequenas, do GeoNames), com área proporcional aos votos válidos; afaste o mapa para ver o mundo. A cidade é a que o TSE registra para as seções: alguns locais de votação ficam em outras cidades da mesma jurisdição consular. Não há voto para governador no exterior.</p>
+      <p><b>Cores.</b> Esquemas do ColorBrewer (Brewer, Hatchard e Harrower, 2003): divergente para o % de um candidato (centro em 50%, onde muda a maioria) e para a variação desde o 1º turno (centro em 0, em roxo e verde para não confundir sinal com partido); sequencial para brancos e nulos e para abstenção, com classes de mesmo número de municípios (quartis). Cada par de classes vizinhas foi medido com diferença de cor ΔE<sub>00</sub> ≥ 10, também simulando daltonismo vermelho-verde (deuteranomalia e protanomalia).</p>
+      <p><b>Tamanho e peso visual.</b> Município grande em área não é município com muito eleitor. Com “Transparência pelo nº de eleitores” ligada, municípios com menos eleitores ficam mais transparentes (valor por transparência, Roth, Woodruff e Johnson, 2010); no "mais votado", cada candidato passa a ter uma cor só, para que a claridade mostre apenas o eleitorado, e não se confunda com a margem. Nos locais de votação, a área do círculo é proporcional aos votos válidos. Nas variações, locais com menos de 50 votos válidos comparáveis ficam apagados: com poucos votos, a porcentagem oscila muito por acaso.</p>
+      <p><b>Projeção.</b> O mapa usa a Web Mercator, padrão dos mapas na internet, que exagera áreas longe do Equador: em relação a Manaus, cerca de +8% em Brasília, +19% em São Paulo, +23% em Curitiba e +44% no Chuí. Por isso as áreas não devem ser comparadas entre regiões.</p>
+      <p><b>Leitura.</b> O resultado de um município ou de um local descreve o conjunto dos eleitores dali, não cada eleitor (falácia ecológica). E o desenho muda com a unidade escolhida: município, local ou seção podem contar histórias diferentes (problema da unidade de área modificável, Openshaw, 1984). Círculos vazados marcam locais com posição aproximada (centro da localidade no CNEFE). Referências completas em <a href="docs/fundamentacao.md" target="_blank" rel="noopener">docs/fundamentacao.md</a>.</p>
+      <p>Limites municipais: IBGE, Malha Municipal Digital 2025, generalizada pelo algoritmo de Visvalingam e Whyatt (1993): para o país inteiro, uma versão leve (intervalo de 2 km); no contorno do município escolhido, uma versão detalhada (intervalo de 20 m), baixada só para ele. <span id="avisos-malha"></span></p>
+      <p id="gerado"></p>
+    </details>
+  </div>
+</aside>
+
+<aside id="detalhe" class="detalhe" hidden aria-label="Resultado do lugar escolhido" aria-live="polite">
+  <button id="detalhe-fechar" class="detalhe-fechar" type="button" aria-label="Fechar" title="Fechar">×</button>
+  <div id="detalhe-corpo"></div>
+</aside>
+
+<script src="lib/maplibre-gl.js"></script>
+<script src="lib/topojson-client.min.js"></script>
+<script src="assets/textos.js?v=5"></script>
+<script src="assets/app.js?v=11"></script>
+</body>
+</html>

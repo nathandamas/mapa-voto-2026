@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="es-ES">
+<head>
+<meta charset="utf-8">
+<!-- Versión en español de España de index.html: mismo código y mismos datos. Las rutas relativas parten de la raíz del sitio.
+     Otras versiones: index.html (portugués), en/index.html (inglés) -->
+<base href="../">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Elecciones de 2026 en Brasil, colegio por colegio</title>
+<meta name="description" content="Resultados de las elecciones de 2026 en Brasil por municipio y por colegio electoral: primera vuelta (presidente, gobernador y senador, con todos los candidatos) y segunda vuelta (presidente y gobernador), comparadas en las mismas mesas. Datos del TSE (Tribunal Superior Electoral).">
+<meta name="theme-color" content="#0f3b46">
+<!-- la misma página en portugués (index.html) y en inglés (en/index.html) -->
+<link rel="alternate" hreflang="pt-BR" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="alternate" hreflang="en-GB" href="https://nathandamas.github.io/mapa-voto-2026/en/">
+<link rel="alternate" hreflang="es-ES" href="https://nathandamas.github.io/mapa-voto-2026/es/">
+<link rel="alternate" hreflang="x-default" href="https://nathandamas.github.io/mapa-voto-2026/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<script>
+/* Começa a baixar os dados já na leitura do HTML, em paralelo com o MapLibre (antes, só começava depois de o app.js
+   rodar, meio segundo a quase 2 segundos depois). O app.js usa estas promessas em vez de pedir de novo. */
+window.CARGA = (function () {
+  var j = function (u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error(u + ": " + r.status); return r.json(); }); };
+  var v = function (m, rel) { return m.arquivos && m.arquivos[rel] ? "?v=" + m.arquivos[rel] : ""; };
+  var meta = j("data/meta.json?t=" + Date.now());   // sempre fresco: é ele que diz a versão dos outros
+  var malha = meta.then(function (m) { var h = m.malha && m.malha["brasil.topo.json"]; return j("malha/brasil.topo.json" + (h ? "?v=" + h : "")); });
+  // municípios: só a parte do mapa inicial ("a"); dados antigos, sem as partes, vêm inteiros
+  var mun = meta.then(function (m) { return m.arquivos["municipios_a.json"] ? j("data/municipios_a.json" + v(m, "municipios_a.json")) : j("data/municipios.json" + v(m, "municipios.json")); });
+  var ext = meta.then(function (m) { return m.arquivos["exterior.json"] ? j("data/exterior.json" + v(m, "exterior.json")).catch(function () { return null; }) : null; });
+  [malha, mun, ext].forEach(function (p) { p.catch(function () {}); });   // o erro é tratado no app.js
+  return { meta: meta, malha: malha, mun: mun, ext: ext };
+})();
+</script>
+<link rel="stylesheet" href="lib/maplibre-gl.css">
+<link rel="stylesheet" href="assets/estilo.css?v=9">
+</head>
+<body>
+<div id="mapa" aria-label="Mapa del resultado por municipio y por colegio electoral"></div>
+
+<aside id="painel" class="painel" aria-label="Controles del mapa">
+  <div class="painel-cabeca">
+    <div>
+      <p class="selo"><span id="selo">Elecciones 2026 · Presidente · Segunda vuelta</span> · <a class="idioma" href="./" hreflang="pt-BR" lang="pt-BR">Português</a> · <a class="idioma" href="en/" hreflang="en-GB" lang="en-GB">English</a></p>
+      <h1>El voto en cada colegio electoral</h1>
+    </div>
+    <div class="cabeca-botoes">
+      <!-- "recolher tudo", como no Nexo: fica só o título -->
+      <button id="minimizar" class="recolher" type="button" aria-expanded="true" aria-controls="painel-fixo painel-corpo" title="Plegar todo el panel" aria-label="Plegar todo el panel">
+        <svg class="ic-min" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <svg class="ic-abrir" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <!-- recolhe só a parte de baixo (resumo, busca, filtro, notas) -->
+      <button id="recolher" class="recolher" type="button" aria-expanded="true" aria-controls="painel-corpo" title="Plegar la parte inferior del panel" aria-label="Plegar la parte inferior del panel">▾</button>
+    </div>
+  </div>
+  <p id="aviso-sintetico" class="aviso-sintetico" hidden><b>Datos sintéticos de prueba.</b> Votos inventados. No los use ni los difunda.</p>
+  <div id="painel-fixo" class="painel-fixo">
+    <!-- 1º ou 2º turno: aparece só quando há dados do 1º turno (data/t1/) -->
+    <div id="turnos" class="turnos" role="group" aria-label="Vuelta" hidden><button type="button" data-t="1" aria-pressed="false">Primera vuelta</button><button type="button" data-t="2" aria-pressed="true">Segunda vuelta</button></div>
+    <span class="rotulo-modo" id="rotulo-modo">Colorear por</span>
+    <div class="selects">
+      <select id="cargo" aria-label="Cargo" hidden><option value="pres">Presidente</option><option value="gov">Gobernador</option></select>
+      <!-- menu com busca, como no Nexo; o <select> escondido guarda o valor (e serve de reserva sem JavaScript) -->
+      <button type="button" id="modo-botao" class="modo-botao" aria-haspopup="listbox" aria-expanded="false" aria-controls="modo-painel"
+        aria-labelledby="rotulo-modo modo-texto"><span id="modo-texto">Más votado</span></button>
+      <div id="modo-painel" class="modo-painel" hidden>
+        <input id="modo-filtro" type="text" class="modo-filtro" placeholder="Busque un candidato" autocomplete="off" spellcheck="false"
+          role="combobox" aria-label="Busque una opción del menú" aria-controls="modo-lista" aria-expanded="true" aria-autocomplete="list">
+        <div id="modo-lista" class="modo-lista" role="listbox" aria-labelledby="rotulo-modo" tabindex="-1"></div>
+      </div>
+      <select id="modo" class="vh" tabindex="-1" aria-hidden="true"></select>
+    </div>
+    <div id="legenda" class="legenda" aria-live="polite"></div>
+  </div>
+  <div id="painel-corpo" class="painel-corpo">
+    <p id="resumo-brasil" class="resumo"></p>
+
+    <div class="campo">
+      <label for="busca">Busque un colegio electoral o un candidato</label>
+      <div class="linha-busca">
+        <div class="auto">
+          <input id="busca" type="text" inputmode="search" placeholder="Escuela, ciudad o candidato" aria-autocomplete="list" aria-controls="sugestoes" aria-expanded="false" autocomplete="off">
+          <ul id="sugestoes" class="sugestoes" role="listbox" hidden></ul>
+        </div>
+        <button id="onde-estou" class="icone" type="button" title="Ir a mi ubicación" aria-label="Ir a mi ubicación">◎</button>
+      </div>
+    </div>
+
+    <div id="filtro" class="campo" hidden>
+      <label for="limiar">Solo donde alcanzó <output id="limiar-txt" for="limiar">todos</output></label>
+      <input id="limiar" type="range" min="0" max="90" step="1" value="0">
+    </div>
+
+    <p class="nota">Cada área es un municipio. Acerque el mapa para ver los colegios electorales: el tamaño del círculo indica los votos válidos.</p>
+    <details class="sobre">
+      <summary>Cómo se hizo</summary>
+      <p>Votos, electores y participación: <span id="fonte-votos">actas de las urnas del TSE (datos abiertos), primera y segunda vuelta</span>, cargo de Presidente. El TSE es el Tribunal Superior Electoral de Brasil. Cada mesa electoral (una urna electrónica) se cuenta en el colegio donde votó en la segunda vuelta, según el registro de colegios electorales del TSE (a través de <a href="https://github.com/nathandamas/onde-voto-2026" target="_blank" rel="noopener">onde-voto-2026</a>), con las coordenadas que facilita el propio TSE.</p>
+      <p>Candidatos: % de los votos válidos (sin votos en blanco ni nulos). En blanco y nulos: % de los votos emitidos. Abstención: electores que no votaron, en % del censo electoral. En Brasil el voto es obligatorio, pero la abstención es frecuente. La comparación con la primera vuelta usa solo las mesas con resultado en las dos vueltas, así que el cambio de colegio entre vueltas no distorsiona el cálculo.</p>
+      <p><b>Primera vuelta.</b> Presidente, gobernador y senador, con todos los candidatos (TSE, votación por mesa electoral de la primera vuelta); cada mesa se cuenta en el colegio donde votó en la primera vuelta. Los votos a candidaturas anuladas no cuentan como válidos, como en el recuento oficial del TSE. En «Más votado», el presidente sigue el color del partido; gobernador y senador, el puesto del candidato en el estado (1.º, 2.º y 3.º; los demás en gris). En presidente y gobernador, el tono más oscuro marca el 50&nbsp;% o más de los votos válidos (la mayoría absoluta que da la victoria en la primera vuelta). Senador: cada elector votó a dos candidatos, y el porcentaje es sobre el total de votos válidos al Senado. En el % de un candidato, cuatro clases con el mismo número de municipios (cuartiles), en el color del candidato.</p>
+      <p id="coord-txt"></p>
+      <p><b>Voto en el exterior.</b> El TSE no facilita coordenadas fuera del país. Cada ciudad donde el TSE instaló mesas se convierte en un punto en el centro de la ciudad (coordenadas de Natural Earth y, para ciudades pequeñas, de GeoNames), con un área proporcional a los votos válidos; aleje el mapa para ver el mundo. La ciudad es la que el TSE registra para esas mesas: algunos colegios están en otras ciudades de la misma demarcación consular. En el exterior no se vota a gobernador.</p>
+      <p><b>Colores.</b> Esquemas de ColorBrewer (Brewer, Hatchard y Harrower, 2003): divergente para el % de un candidato (centrado en el 50&nbsp;%, donde cambia la mayoría) y para la variación desde la primera vuelta (centrado en 0, en morado y verde para no confundir el sentido con el partido); secuencial para los votos en blanco y nulos y para la abstención, con clases que reúnen el mismo número de municipios (cuartiles). Cada par de clases vecinas se midió con una diferencia de color ΔE<sub>00</sub> ≥ 10, también simulando daltonismo rojo-verde (deuteranomalía y protanomalía).</p>
+      <p><b>Tamaño y peso visual.</b> Un municipio grande en superficie no es necesariamente un municipio con muchos electores. Con «Transparencia según el número de electores» activada, los municipios con menos electores son más transparentes (valor por transparencia, Roth, Woodruff y Johnson, 2010); en «Más votado», cada candidato pasa a tener un solo color, para que la claridad muestre solo el censo y no se confunda con el margen. En los colegios electorales, el área del círculo es proporcional a los votos válidos. En las variaciones, los colegios con menos de 50 votos válidos comparables aparecen atenuados: con pocos votos, el porcentaje oscila mucho por azar.</p>
+      <p><b>Proyección.</b> El mapa usa la proyección Web Mercator, estándar en los mapas de internet, que exagera las superficies lejos del ecuador: respecto a Manaos, alrededor de un +8&nbsp;% en Brasilia, +19&nbsp;% en São Paulo, +23&nbsp;% en Curitiba y +44&nbsp;% en Chuí. Por eso no deben compararse superficies entre regiones.</p>
+      <p><b>Lectura.</b> El resultado de un municipio o de un colegio describe al conjunto de sus electores, no a cada elector (falacia ecológica). Y la imagen cambia con la unidad elegida: municipio, colegio o mesa pueden contar historias distintas (problema de la unidad de área modificable, Openshaw, 1984). Los círculos huecos marcan colegios con posición aproximada (centro de la localidad en el registro de direcciones del IBGE, CNEFE). Resumen de la metodología: <a href="docs/metodologia.md" target="_blank" rel="noopener">docs/metodologia.md</a> (notas completas en portugués: <a href="docs/fundamentacao.md" target="_blank" rel="noopener" hreflang="pt-BR">docs/fundamentacao.md</a>).</p>
+      <p>Límites municipales: IBGE (Instituto Brasileño de Geografía y Estadística), Malla Municipal Digital 2025, generalizada con el algoritmo de Visvalingam y Whyatt (1993): para todo el país, una versión ligera (tolerancia de 2 km); para el contorno del municipio elegido, una versión detallada (tolerancia de 20 m), que se descarga solo para él. <span id="avisos-malha"></span></p>
+      <p id="gerado"></p>
+    </details>
+  </div>
+</aside>
+
+<aside id="detalhe" class="detalhe" hidden aria-label="Resultado del lugar elegido" aria-live="polite">
+  <button id="detalhe-fechar" class="detalhe-fechar" type="button" aria-label="Cerrar" title="Cerrar">×</button>
+  <div id="detalhe-corpo"></div>
+</aside>
+
+<script src="lib/maplibre-gl.js"></script>
+<script src="lib/topojson-client.min.js"></script>
+<script src="assets/textos.js?v=5"></script>
+<script src="assets/app.js?v=11"></script>
+</body>
+</html>
